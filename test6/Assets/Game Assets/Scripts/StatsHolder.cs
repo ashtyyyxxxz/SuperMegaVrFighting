@@ -49,7 +49,7 @@ public class StatsHolder : NetworkBehaviour
 
         if (destroyOnDeath)
         {
-            NetworkObject.Despawn(true);
+            //NetworkObject.Despawn(true);
         }
         else
         {

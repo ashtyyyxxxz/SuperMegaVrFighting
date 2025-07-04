@@ -5,171 +5,124 @@ using UnityEngine;
 [RequireComponent(typeof(NetworkObject))]
 public class CombatSystem : NetworkBehaviour
 {
-    [Header("Network Settings")]
-    [SerializeField] private float networkUpdateRate = 0.1f; // Частота сетевых обновлений
+    [Header("Physical Hands")]
+    [SerializeField] private Transform leftPhysicalHand;
+    [SerializeField] private Transform rightPhysicalHand;
 
-    [Header("VR Hands")]
-    [SerializeField] private Transform leftHandController;
-    [SerializeField] private Transform rightHandController;
-    [SerializeField] private Transform leftHandVisual;
-    [SerializeField] private Transform rightHandVisual;
+    [Header("Visual Hands")]
+    [SerializeField] private Transform leftVisualHand;
+    [SerializeField] private Transform rightVisualHand;
 
-    [Header("Logical Hands (Colliders)")]
-    [SerializeField] private NetworkTransform logicalLeftHand;
-    [SerializeField] private NetworkTransform logicalRightHand;
+    [Header("Logical Hands")]
+    [SerializeField] private Transform leftLogicalHand;
+    [SerializeField] private Transform rightLogicalHand;
+    [SerializeField] private NetworkTransform leftNetworkTransform;
+    [SerializeField] private NetworkTransform rightNetworkTransform;
 
     [Header("Effects")]
-    [SerializeField] private NetworkObject hitEffectPrefab;
+    [SerializeField] private GameObject hitEffectPrefab;
     [SerializeField] private AudioSource hitSound;
 
-    private float _lastNetworkUpdateTime;
-    private HandState _lastLeftHandState;
-    private HandState _lastRightHandState;
+    private NetworkVariable<HandData> leftHandData = new NetworkVariable<HandData>();
+    private NetworkVariable<HandData> rightHandData = new NetworkVariable<HandData>();
 
-    private struct HandState : INetworkSerializable
+    private struct HandData : INetworkSerializable
     {
         public Vector3 Position;
         public Quaternion Rotation;
-        public float VelocityMagnitude;
+        public float Velocity;
 
         public void NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter
         {
             serializer.SerializeValue(ref Position);
             serializer.SerializeValue(ref Rotation);
-            serializer.SerializeValue(ref VelocityMagnitude);
+            serializer.SerializeValue(ref Velocity);
         }
-    }
-
-    private void Awake()
-    {
-        // Инициализация логических рук
-        if (logicalLeftHand != null) logicalLeftHand.Interpolate = true;
-        if (logicalRightHand != null) logicalRightHand.Interpolate = true;
     }
 
     private void Update()
     {
-        if (!IsSpawned) return;
-
-        UpdateHandVisuals();
-
-        // Сетевые обновления с заданной частотой
-        if (Time.time - _lastNetworkUpdateTime >= networkUpdateRate)
-        {
-            _lastNetworkUpdateTime = Time.time;
-            if (IsServer)
-            {
-                UpdateHandStates();
-            }
-            else if (IsOwner)
-            {
-                SendHandStatesServerRpc(
-                    GetHandState(leftHandController),
-                    GetHandState(rightHandController));
-            }
-        }
-    }
-
-    private void UpdateHandVisuals()
-    {
-        // Локальное обновление визуальных рук
-        if (leftHandVisual && leftHandController)
-        {
-            leftHandVisual.SetPositionAndRotation(
-                leftHandController.position,
-                leftHandController.rotation);
-        }
-
-        if (rightHandVisual && rightHandController)
-        {
-            rightHandVisual.SetPositionAndRotation(
-                rightHandController.position,
-                rightHandController.rotation);
-        }
-    }
-
-    private void UpdateHandStates()
-    {
         if (IsOwner)
         {
-            // Владелец обновляет состояния напрямую
-            UpdateLogicalHand(leftHandController, logicalLeftHand);
-            UpdateLogicalHand(rightHandController, logicalRightHand);
+            UpdateOwnerHands();
         }
         else
         {
-            // Для других игроков используем сетевые данные
-            UpdateLogicalHand(_lastLeftHandState, logicalLeftHand);
-            UpdateLogicalHand(_lastRightHandState, logicalRightHand);
+            UpdateRemoteHands();
         }
     }
 
-    private void UpdateLogicalHand(Transform source, NetworkTransform target)
+    private void UpdateOwnerHands()
     {
-        if (source && target)
+        // Обновляем данные для левой руки
+        var leftData = new HandData
         {
-            target.transform.SetPositionAndRotation(
-                source.position,
-                source.rotation);
-        }
-    }
-
-    private void UpdateLogicalHand(HandState state, NetworkTransform target)
-    {
-        if (target)
-        {
-            target.transform.SetPositionAndRotation(
-                state.Position,
-                state.Rotation);
-        }
-    }
-
-    private HandState GetHandState(Transform hand)
-    {
-        return new HandState
-        {
-            Position = hand.position,
-            Rotation = hand.rotation,
-            VelocityMagnitude = 0 // Можно добавить расчет скорости
+            Position = leftPhysicalHand.position,
+            Rotation = leftPhysicalHand.rotation,
+            Velocity = 0 // Можно добавить расчет скорости
         };
+
+        // Обновляем данные для правой руки
+        var rightData = new HandData
+        {
+            Position = rightPhysicalHand.position,
+            Rotation = rightPhysicalHand.rotation,
+            Velocity = 0
+        };
+
+        if (IsServer)
+        {
+            leftHandData.Value = leftData;
+            rightHandData.Value = rightData;
+        }
+        else
+        {
+            UpdateHandServerRpc(leftData, rightData);
+        }
+
+        // Локальная синхронизация визуальных рук
+        leftVisualHand.SetPositionAndRotation(leftPhysicalHand.position, leftPhysicalHand.rotation);
+        rightVisualHand.SetPositionAndRotation(rightPhysicalHand.position, rightPhysicalHand.rotation);
+    }
+
+    private void UpdateRemoteHands()
+    {
+        // Синхронизация для других игроков
+        leftVisualHand.SetPositionAndRotation(leftHandData.Value.Position, leftHandData.Value.Rotation);
+        rightVisualHand.SetPositionAndRotation(rightHandData.Value.Position, rightHandData.Value.Rotation);
+
+        leftLogicalHand.SetPositionAndRotation(leftHandData.Value.Position, leftHandData.Value.Rotation);
+        rightLogicalHand.SetPositionAndRotation(rightHandData.Value.Position, rightHandData.Value.Rotation);
     }
 
     [ServerRpc]
-    private void SendHandStatesServerRpc(HandState leftState, HandState rightState)
+    private void UpdateHandServerRpc(HandData leftData, HandData rightData)
     {
-        _lastLeftHandState = leftState;
-        _lastRightHandState = rightState;
-
-        // Репликация состояния другим клиентам
-        UpdateHandStatesClientRpc(leftState, rightState);
-    }
-
-    [ClientRpc]
-    private void UpdateHandStatesClientRpc(HandState leftState, HandState rightState)
-    {
-        if (!IsOwner)
-        {
-            _lastLeftHandState = leftState;
-            _lastRightHandState = rightState;
-        }
+        leftHandData.Value = leftData;
+        rightHandData.Value = rightData;
     }
 
     [ServerRpc]
     public void PlayHitEffectServerRpc(Vector3 position)
     {
-        //Вариант 1: Использовать простой префаб без вложенных NetworkObjects
-        GameObject effect = Instantiate(hitEffectPrefab.gameObject, position, Quaternion.identity);
-        effect.GetComponent<NetworkObject>().Spawn();
-        //Destroy(effect, 2f);
+        // Спавним эффект только на сервере (не синхронизируется)
+        GameObject serverEffect = Instantiate(hitEffectPrefab, position, Quaternion.identity);
+        Destroy(serverEffect, 2f);
 
-        // Вариант 2: Спавнить локально на всех клиентах
-        //PlayHitEffectClientRpc(position);
+        // Запускаем эффект на всех клиентах
+        PlayHitEffectClientRpc(position);
     }
 
     [ClientRpc]
     private void PlayHitEffectClientRpc(Vector3 position)
     {
-        // Простое решение - спавнить эффект локально
-        Instantiate(hitEffectPrefab, position, Quaternion.identity);
+        // Спавним локальную версию эффекта на каждом клиенте
+        GameObject clientEffect = Instantiate(hitEffectPrefab, position, Quaternion.identity);
+
+        // Проигрываем звук
+        if (hitSound != null)
+        {
+            hitSound.Play();
+        }
     }
 }

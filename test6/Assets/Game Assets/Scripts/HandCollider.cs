@@ -1,7 +1,6 @@
 using Unity.Netcode;
 using UnityEngine;
 
-[RequireComponent(typeof(NetworkObject))]
 public class HandCollider : NetworkBehaviour
 {
     [Header("Damage Settings")]
